@@ -1,0 +1,156 @@
+import numpy as np
+import pandas as pd
+from pybrain.datasets import SupervisedDataSet
+from itertools import product
+import math
+from pybrain.structure import SigmoidLayer, LinearLayer
+from pybrain.tools.shortcuts import buildNetwork
+from pybrain.supervised.trainers import BackpropTrainer
+from pybrain.tools.xml.networkwriter import NetworkWriter
+from pybrain.tools.xml.networkreader import NetworkReader
+import pylab
+from utilities import normalizer
+import sys
+
+lista_col=['Illumination umol/m2/s','Time (h)', 'DCW (mg/l)', 'nitrate (mg/l)', 'lutein content (mg/l)']
+lista_col1=['Illumination','Time', 'DCW', 'nitrate', 'lutein']
+
+net_fold='networks/'
+#import as Pandas Data the excel file
+mb2 = pd.read_excel('lutein_exp_data.xlsx', sheetname='Sheet1', header=None,usecols=range(5),columns=lista_col)
+mb2.col=lista_col1
+array_data=mb2.values[1:]#keep only the numbers and turn into numpy array
+nEpochs=200
+#We will do all 4 types, with data replication
+noise_list=[0.03,0.05]
+
+#add noise
+length_data=len(array_data)
+
+#the four sets are given separately
+set_lengths=((0,13),(13,26),(26,39),(39,52))
+#third set is separated
+#an enchanced array that will contain the noisy data
+enh_array=np.empty((1,5))#np.zeros((38,5))
+cross_val_set=array_data[set_lengths[2][0]:set_lengths[2][1]]
+
+for noise in noise_list:
+
+    #augment the enhanced array
+    for i,m in product([0,1,3],xrange(100)):
+        #i is the dataset
+        #for each dataset we produce a 100 noise_arrays
+        uL=set_lengths[i]
+        print uL
+        temp_data=array_data[uL[0]:uL[1]]
+        #generate an array the size of the current sub array, to be added.
+        noise_array=np.array([[temp_data[k,0]]+[temp_data[k,j]+temp_data[k,j]*np.random.uniform(-noise,noise) for j in xrange(1,5)] for k in xrange(len(temp_data))])
+        print noise_array
+        enh_array=np.concatenate((enh_array,noise_array),axis=0)
+
+    #Data normalization
+
+
+    #print enh_array[:3]
+    #print enh_array[1:3]
+    #print 'its length',enh_array.shape
+    # a custom built function normalizes along the column. The columns are then put back together
+
+    enh_array=np.column_stack((normalizer(enh_array[1:,0]),normalizer(enh_array[1:,1]),normalizer(enh_array[1:,2]),normalizer(enh_array[1:,3]),normalizer(enh_array[1:,4])))
+    print enh_array
+    sys.exit()        
+    #print enh_array
+    #print 'its length once normalized',enh_array.shape
+    #test_arr=pd.DataFrame(enh_array)
+    #test_arr.to_csv('test_check.csv')
+    #sys.exit()
+    #check later this is NOT DONE
+
+    #build and populate datasets
+    ds1 = SupervisedDataSet(5, 3)
+    ds2 = SupervisedDataSet(4, 3)
+    r_lengths=[[i,i+13] for i in xrange(0,13*100*3,13)]
+    #print r_lengths
+
+    for j in r_lengths:
+        temp_data=enh_array[j[0]:j[1]]
+        
+        for k in xrange(len(temp_data)-1):
+
+            for l in xrange(k+1,len(temp_data)):
+                ds1.addSample((temp_data[k][0],temp_data[l][1]-temp_data[k][1],temp_data[k][2],temp_data[k][3],temp_data[k][4]), (temp_data[l][2]-temp_data[k][2],temp_data[l][3]-temp_data[k][3],temp_data[l][4]-temp_data[k][4]))
+                #in this data set we add the illumination factor, the chemical concentrations at a certain time
+                #one of the inputs is the difference between current time and the time at step we want as output
+                #the output is only the chemical concentrations
+
+    #dataset without time
+
+    for j in r_lengths:
+        temp_data=enh_array[j[0]:j[1]]
+        
+        for k in xrange(len(temp_data)-1):
+            ds2.addSample((temp_data[k][0],temp_data[k][2],temp_data[k][3],temp_data[k][4]), (temp_data[k+1][2]-temp_data[k][2],temp_data[k+1][3]-temp_data[k][3],temp_data[k+1][4]-temp_data[k][4]))
+            #in this one only 4 inputs.
+
+    #both types of ANN will be run, and with 1 and 2 hidden layers
+
+    net1 = buildNetwork(5,
+                           10, #number of hidden units
+                           3,
+                           bias = True,
+                           hiddenclass = SigmoidLayer,
+                           outclass = LinearLayer
+                        )
+
+    net2 = buildNetwork(4,
+                           20, # number of hidden units
+                           3,
+                           bias = True,
+                           hiddenclass = SigmoidLayer,
+                           outclass = LinearLayer
+                        )
+
+    net3 = buildNetwork(5,
+                           15,
+                           15, # number of hidden units
+                           3,
+                           bias = True,
+                           hiddenclass = SigmoidLayer,
+                           outclass = LinearLayer
+                        )
+
+    net4 = buildNetwork(4,
+                           15, # number of hidden units
+                           15, # number of hidden units
+                           3,
+                           bias = True,
+                           hiddenclass = SigmoidLayer,
+                           outclass = LinearLayer
+                        )
+    #initialize the structures
+    net1.randomize()
+    net1.sortModules()
+    net2.randomize()
+    net2.sortModules()
+    net3.randomize()
+    net3.sortModules()
+    net4.randomize()
+    net4.sortModules()
+    #create trainers
+    #train for set amount of epochs
+    #save networks to disc
+    trainer1 = BackpropTrainer(net1, ds1, verbose = True)
+    trainer1.trainEpochs(nEpochs)
+    NetworkWriter.writeToFile(net1,net_fold+ 'network_Type1H1.xml')
+    trainer2 = BackpropTrainer(net2, ds2, verbose = True)
+    trainer2.trainEpochs(nEpochs)
+    NetworkWriter.writeToFile(net2,net_fold+ 'network_Type2H1.xml')
+    trainer3 = BackpropTrainer(net3, ds1, verbose = True)
+    trainer3.trainEpochs(nEpochs)
+    NetworkWriter.writeToFile(net3,net_fold+ 'network_Type1H2.xml')
+    trainer4 = BackpropTrainer(net4, ds2, verbose = True)
+    trainer4.trainEpochs(nEpochs)
+    NetworkWriter.writeToFile(net4,net_fold+ 'network_Type2H2.xml')
+
+print 'Work completed. Check out the networks have been saved'
+

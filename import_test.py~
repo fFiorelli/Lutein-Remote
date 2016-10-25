@@ -1,0 +1,142 @@
+import numpy as np
+import pandas as pd
+from pybrain.datasets import SupervisedDataSet
+from itertools import product
+import math
+from pybrain.structure import SigmoidLayer, LinearLayer
+from pybrain.tools.shortcuts import buildNetwork
+from pybrain.supervised.trainers import BackpropTrainer
+import pylab
+from utilities import normalizer
+import sys
+
+lista_col=['Illumination umol/m2/s','Time (h)', 'DCW (mg/l)', 'nitrate (mg/l)', 'lutein content (mg/l)']
+lista_col1=['Illumination','Time', 'DCW', 'nitrate', 'lutein']
+#import as Pandas Data the excel file
+mb2 = pd.read_excel('lutein_exp_data.xlsx', sheetname='Sheet1', header=None,usecols=range(5),columns=lista_col)
+mb2.col=lista_col1
+array_data=mb2.values[1:]#keep only the numbers and turn into numpy array
+#mb2.colums()
+n_hidden=[5,10,15,20,30]#to become a list
+n_Epochs=[15,30,50,100,300]
+#print mb2
+#print mb2.head
+error_storage=[]
+
+#----------
+# build the datasets
+#----------
+
+
+
+
+length_data=len(array_data)
+ds1 = SupervisedDataSet(5, 3)
+#the four sets are given separately
+set_lengths=((0,13),(13,26),(26,39),(39,52))
+
+#Data normalization
+# a custom built function normalizes along the column. The columns are then put back together
+array_data=np.column_stack((normalizer(array_data[:,0]),normalizer(array_data[:,1]),normalizer(array_data[:,2]),normalizer(array_data[:,3]),normalizer(array_data[:,4])))
+
+#print array_data
+
+
+for j in set_lengths:
+    temp_data=array_data[j[0]:j[1]]
+    
+    for k in xrange(len(temp_data)-1):
+
+        for l in xrange(k+1,len(temp_data)):
+            ds1.addSample((temp_data[k][0],temp_data[l][1]-temp_data[k][1],temp_data[k][2],temp_data[k][3],temp_data[k][4]), (temp_data[l][2]-temp_data[k][2],temp_data[l][3]-temp_data[k][3],temp_data[l][4]-temp_data[k][4]))
+            #in this data set we add the illumination factor, the chemical concentrations at a certain time
+            #one of the inputs is the difference between current time and the time at step we want as output
+            #the output is only the chemical concentrations
+
+#dataset without time
+ds2 = SupervisedDataSet(4, 3)
+for j in set_lengths:
+    temp_data=array_data[j[0]:j[1]]
+    
+    for k in xrange(len(temp_data)-1):
+        ds2.addSample((temp_data[k][0],temp_data[k][2],temp_data[k][3],temp_data[k][4]), (temp_data[k+1][2]-temp_data[k][2],temp_data[k+1][3]-temp_data[k][3],temp_data[k+1][4]-temp_data[k][4]))
+        #in this one only 4 inputs.
+
+for nH,nE in product(n_hidden,n_Epochs):
+    #----------
+    # build the network in variable 
+    #----------
+
+    net1 = buildNetwork(5,
+                       nH, # number of hidden units
+                       3,
+                       bias = True,
+                       hiddenclass = SigmoidLayer,
+                       outclass = LinearLayer
+                       )
+
+    net2 = buildNetwork(4,
+                       nH, # number of hidden units
+                       3,
+                       bias = True,
+                       hiddenclass = SigmoidLayer,
+                       outclass = LinearLayer
+                       )
+
+    #----------
+    # train until convergence
+    #----------
+    net1.randomize()
+    net1.sortModules()
+    net2.randomize()
+    net2.sortModules()
+
+    trainer1 = BackpropTrainer(net1, ds1, verbose = False)
+    trainer2 = BackpropTrainer(net2, ds2, verbose = False)
+    trainer1.trainEpochs(nE)
+    trainer2.trainEpochs(nE)
+
+    #----------
+    # evaluate
+    #----------
+    #simulation for Network 1
+
+    sim_net1=[]
+
+
+    for j in set_lengths:
+        temp_data=array_data[j[0]:j[1]]
+        
+        for k in xrange(len(temp_data)-1):
+
+            ansK=[]
+            for l in xrange(k+1,len(temp_data)):
+                ans=net1.activate((temp_data[k][0],temp_data[l][1]-temp_data[k][1],temp_data[k][2],temp_data[k][3],temp_data[k][4]))
+                ansK.append([abs(temp_data[l][2]-(temp_data[k][2]+ans[0])),abs(temp_data[l][3]-(temp_data[k][3]+ans[1])),abs(temp_data[l][4]-(temp_data[k][4]+ans[2]))])
+                #need to test for a more limited number
+            sim_net1.append(np.mean(ansK,axis=0))
+
+    error1=max(np.mean(sim_net1,axis=0))    
+    print 'For network 1 at hidden layer strata ',nH,' run for ',nE,' epochs the error is ', error1
+
+    #simulation for Network 2.
+    sim_net2=[]
+    for j in set_lengths:
+        temp_data=array_data[j[0]:j[1]]
+        #sim_net2.append((temp_data[0][2],temp_data[0][3],temp_data[0][4]))
+        ansK=[]       
+        for k in xrange(len(temp_data)-1):
+            ans=net2.activate((temp_data[k][0],temp_data[k][2],temp_data[k][3],temp_data[k][4]))
+            ansK.append([abs(temp_data[k+1][2]-(temp_data[k][2]+ans[0])),abs(temp_data[k+1][3]-(temp_data[k][3]+ans[1])),abs(temp_data[k+1][4]-(temp_data[k][4]+ans[2]))])
+        sim_net2.append(np.mean(ansK,axis=0))
+
+    #get  error for each variable difference. Since they are already all normalized, no std
+    #maximum error
+    error2=max(np.mean(sim_net2,axis=0))
+    print 'For network 2 at hidden layer strata ',nH,' the error is ', error2
+    error_storage.append([nH,nE,error1,error2])
+
+alpha=pd.DataFrame(error_storage,columns=['Num_Neuron_Hidden','Num_Epochs','Network_Struc_1','Network_Struc_2'])
+#save to csv
+alpha.to_csv('nHidden_test.csv') 
+print 'Work completed. Check out the csv to select the best structure'
